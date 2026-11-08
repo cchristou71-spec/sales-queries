@@ -80,8 +80,9 @@ a.map{color:var(--ac);text-decoration:underline}
   <a id="f_map" class="map hide" target="_blank" rel="noopener">📍 Open in Maps</a>
   <label>Query</label><textarea id="f_query"></textarea>
   <label>Resolution</label><textarea id="f_res"></textarea>
-  <label><input type="checkbox" id="f_has" style="width:auto;margin:0 6px 0 0" onchange="togAppt()">Appointment booked</label>
-  <div id="apptBox" class="hide" style="margin-top:8px"><label>Appointment date and time</label><input id="f_appt" type="datetime-local"></div>
+  <label>Appointment date and time (optional)</label>
+  <input id="f_appt" type="datetime-local" oninput="showDay()">
+  <div id="dayBox" class="card hide" style="margin-top:-2px"></div>
   <label>How they felt</label>
   <select id="f_feel"><option value="">Not recorded</option><option>😀 Happy</option><option>🙂 Positive</option><option>😐 Neutral</option><option>😕 Unsure</option><option>😠 Unhappy</option></select>
   <label>Status</label>
@@ -140,18 +141,22 @@ function money(x){
 }
 function sameDay(a,b){return a.toDateString()===b.toDateString()}
 function render(){
-  const chips=[["all","All"],["today","Today"],["appts","Appointments"],["open","Open"],["follow_up","Follow-up"],["resolved","Resolved"]];
+  const chips=[["all","All"],["today","Today"],["sched","Schedule"],["appts","Appointments"],["open","Open"],["follow_up","Follow-up"],["resolved","Resolved"]];
   $("chips").innerHTML=chips.map(([k,l])=>`<button class="chip ${filter===k?"on":""}" onclick="setF('${k}')">${l}</button>`).join("");
   const q=$("q").value.toLowerCase(),now=new Date();
+  if(!schedDay)schedDay=isoLocal(now).slice(0,10);
   let r=rows.filter(x=>{
+    if(filter==="sched")return x.appointment_at&&isoLocal(x.appointment_at).slice(0,10)===schedDay;
     if(filter==="today"&&!(x.appointment_at&&sameDay(new Date(x.appointment_at),now)))return false;
     if(filter==="appts"&&!(x.appointment_at&&new Date(x.appointment_at)>=new Date(now.toDateString())))return false;
     if(["open","follow_up","resolved"].includes(filter)&&x.status!==filter)return false;
     return !q||[x.customer_name,x.address,x.query,x.resolution,x.notes].join(" ").toLowerCase().includes(q);
   });
-  if(filter==="today"||filter==="appts")r.sort((a,b)=>new Date(a.appointment_at)-new Date(b.appointment_at));
+  if(filter==="today"||filter==="appts"||filter==="sched")r.sort((a,b)=>new Date(a.appointment_at)-new Date(b.appointment_at));
   const tot=r.reduce((a,x)=>{a.h+=Number(x.hours||0);if(x.free_community)a.f+=Number(x.hours||0);else a.m+=Number(x.amount_charged||0);return a},{h:0,f:0,m:0});
-  $("sum").textContent=r.length+" shown · "+gbp(tot.m)+" charged · "+tot.h+" hrs total ("+tot.f+" free community)";
+  if(filter==="sched"){
+    $("sum").innerHTML='<div style="display:flex;gap:6px;align-items:center"><button class="sec" onclick="moveDay(-1)">‹</button><input type="date" value="'+schedDay+'" onchange="schedDay=this.value||schedDay;render()" style="margin:0"><button class="sec" onclick="moveDay(1)">›</button><button class="sec" onclick="schedDay=null;render()">Today</button></div><div style="margin-top:6px"><b>'+new Date(schedDay+"T12:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})+"</b> · "+r.length+" booked</div>";
+  }else $("sum").textContent=r.length+" shown · "+gbp(tot.m)+" charged · "+tot.h+" hrs total ("+tot.f+" free community)";
   $("list").innerHTML=r.length?r.map(x=>`<div class="card ${x.appointment_at?"appt":""}" onclick="openForm('${x.id}')">
     <div class="row"><b>${esc(x.customer_name)}</b><span class="tag ${x.status}">${LBL[x.status]}</span></div>
     ${x.address?`<div class="mut">📍 <a class="map" href="${mapUrl(x.address)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(x.address)}</a></div>`:""}
@@ -161,26 +166,36 @@ function render(){
     ${money(x)}<div class="mut" style="margin-top:4px">${esc(x.feeling||"")} · ${new Date(x.created_at).toLocaleDateString("en-GB")}</div>
   </div>`).join(""):'<div class="mut" style="text-align:center;padding:30px">Nothing here yet</div>';
 }
+let schedDay=null;
+function moveDay(n){const d=new Date(schedDay+"T12:00");d.setDate(d.getDate()+n);schedDay=isoLocal(d).slice(0,10);render()}
 function setF(k){filter=k;render()}
 function togFree(){const f=$("f_free").checked;$("freeBox").classList.toggle("hide",!f);$("amtBox").classList.toggle("hide",f)}
-function togAppt(){$("apptBox").classList.toggle("hide",!$("f_has").checked)}
+function dayRows(d,skip){return rows.filter(x=>x.appointment_at&&x.id!==skip&&sameDay(new Date(x.appointment_at),d)).sort((a,b)=>new Date(a.appointment_at)-new Date(b.appointment_at))}
+const hm=d=>new Date(d).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+function showDay(){
+  const v=$("f_appt").value,b=$("dayBox");
+  if(!v){b.classList.add("hide");return}
+  const d=new Date(v),r=dayRows(d,editId);
+  b.classList.remove("hide");
+  b.innerHTML='<b>Also on '+d.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})+'</b>'+(r.length?r.map(x=>'<div>'+hm(x.appointment_at)+' – '+esc(x.customer_name)+(x.address?' <span class="mut">('+esc(x.address)+')</span>':'')+'</div>').join(""):'<div class="mut">Nothing else booked that day</div>');
+}
 function openForm(id){
   editId=id||null;
   const x=id?rows.find(r=>r.id===id):{};
   $("ftitle").textContent=id?"Edit query":"New query";
   $("f_name").value=x.customer_name||"";$("f_addr").value=x.address||"";
   $("f_query").value=x.query||"";$("f_res").value=x.resolution||"";
-  $("f_has").checked=!!x.appointment_at;$("f_appt").value=x.appointment_at?isoLocal(x.appointment_at):"";
+  $("f_appt").value=x.appointment_at?isoLocal(x.appointment_at):"";
   $("f_feel").value=x.feeling||"";$("f_status").value=x.status||"open";$("f_notes").value=x.notes||"";
   $("f_free").checked=!!x.free_community;$("f_comm").value=x.community_name||"";$("f_hrs").value=x.hours??"";$("f_amt").value=x.amount_charged??"";
-  updMap();togAppt();togFree();$("ferr").textContent="";$("delBtn").classList.toggle("hide",!id);
+  updMap();showDay();togFree();$("ferr").textContent="";$("delBtn").classList.toggle("hide",!id);
   $("sheet").style.display="flex";
 }
 function closeForm(){$("sheet").style.display="none"}
 async function save(){
   const name=$("f_name").value.trim();
   if(!name){$("ferr").textContent="Customer name is required";return}
-  const has=$("f_has").checked&&$("f_appt").value;
+  const has=$("f_appt").value;
   const rec={customer_name:name,address:$("f_addr").value.trim()||null,query:$("f_query").value.trim()||null,
     resolution:$("f_res").value.trim()||null,has_appointment:!!has,appointment_at:has?new Date($("f_appt").value).toISOString():null,
     free_community:$("f_free").checked,community_name:$("f_free").checked?($("f_comm").value.trim()||null):null,hours:$("f_hrs").value===""?null:parseFloat($("f_hrs").value),amount_charged:$("f_free").checked||$("f_amt").value===""?null:parseFloat($("f_amt").value),feeling:$("f_feel").value||null,status:$("f_status").value,notes:$("f_notes").value.trim()||null,updated_at:new Date().toISOString()};
